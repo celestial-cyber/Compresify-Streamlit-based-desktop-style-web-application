@@ -1,0 +1,4 @@
+streamlit
+PyPDF2
+pikepdf
+streamlit-sortables
