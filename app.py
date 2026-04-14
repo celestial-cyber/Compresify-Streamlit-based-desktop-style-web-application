@@ -1,21 +1,20 @@
-import streamlit as st
-from PyPDF2 import PdfMerger
-import pikepdf
-import tempfile
-import os
+﻿import os
+from pathlib import Path
+from typing import List
 
-# -----------------------
-# MUST BE FIRST STREAMLIT COMMAND
-# -----------------------
-st.set_page_config(
-    page_title="Compresify",
-    page_icon="📄",
-    layout="wide"
+import streamlit as st
+
+from core import (
+    MAX_UPLOAD_MB,
+    compress_pdf,
+    ensure_pdf_size,
+    format_bytes,
+    merge_pdfs,
+    save_uploaded_file,
 )
 
-# -----------------------
-# Custom CSS (AFTER config)
-# -----------------------
+st.set_page_config(page_title="Compresify", page_icon="📄", layout="wide")
+
 st.markdown("""
 <style>
     .stButton>button {
@@ -27,133 +26,120 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# -----------------------
-# Sidebar
-# -----------------------
 st.sidebar.title("📄 Compresify")
 option = st.sidebar.radio("Choose Tool", ["Merge PDFs", "Compress PDF"])
-
 st.sidebar.markdown("---")
-st.sidebar.caption("✨ Built by Celestial V")
-
-# -----------------------
-# Functions
-# -----------------------
-
-def merge_pdfs(files):
-    merger = PdfMerger()
-    for file in files:
-        merger.append(file)
-
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-    merger.write(temp_file.name)
-    merger.close()
-
-    return temp_file.name
+st.sidebar.caption(f"✅ Supports uploads up to {MAX_UPLOAD_MB} MB")
 
 
-def compress_pdf(input_path, level="medium"):
-    output_path = input_path.replace(".pdf", "_compressed.pdf")
+def cleanup_temp_files(files: List[str]) -> None:
+    for path in files:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
-    # Compression settings
-    if level == "low":
-        quality = 80
-    elif level == "medium":
-        quality = 50
-    else:  # high
-        quality = 30
-
-    with pikepdf.open(input_path) as pdf:
-        pdf.save(
-            output_path,
-            compress_streams=True,
-            object_stream_mode=pikepdf.ObjectStreamMode.generate,
-            recompress_flate=True
-        )
-
-    return output_path
-
-# -----------------------
-# Merge PDFs UI
-# -----------------------
 
 if option == "Merge PDFs":
     st.title("🔗 Merge PDFs")
+    st.info("Upload multiple PDFs and merge them into a single document. Supports uploads up to 1 GB.")
 
-    files = st.file_uploader(
-        "Upload PDF files",
-        type="pdf",
-        accept_multiple_files=True
-    )
+    files = st.file_uploader("Upload PDF files", type="pdf", accept_multiple_files=True)
 
     if files:
-        st.subheader("📂 Uploaded Files")
+        valid_files = []
+        for file in files:
+            file_size = getattr(file, "size", None)
+            if file_size and file_size > MAX_UPLOAD_MB * 1024 * 1024:
+                st.error(f"'{file.name}' is larger than {MAX_UPLOAD_MB} MB and cannot be processed.")
+            else:
+                valid_files.append(file)
 
-        for i, file in enumerate(files, 1):
-            st.write(f"{i}. {file.name}")
+        if valid_files:
+            st.subheader("📂 Uploaded Files")
+            for file in valid_files:
+                file_size = getattr(file, "size", None)
+                st.write(f"{file.name} — {format_bytes(file_size) if file_size else 'Size unknown'}")
 
-        output_name = st.text_input("Output file name", "merged.pdf")
+            output_name = st.text_input("Output file name", "merged.pdf")
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🚀 Merge"):
+                    with st.spinner("Merging PDFs..."):
+                        temp_files = []
+                        merged_file = None
+                        try:
+                            for uploaded_file in valid_files:
+                                ensure_pdf_size(uploaded_file)
+                                temp_files.append(save_uploaded_file(uploaded_file))
 
-        col1, col2 = st.columns(2)
+                            merged_file = merge_pdfs(temp_files)
+                            with open(merged_file, "rb") as file_data:
+                                st.success("✅ Merge complete.")
+                                st.download_button(
+                                    label="⬇ Download Merged PDF",
+                                    data=file_data,
+                                    file_name=output_name,
+                                    mime="application/pdf",
+                                )
+                        except Exception as error:
+                            st.error(f"Merge failed: {error}")
+                        finally:
+                            cleanup_temp_files(temp_files)
+                            if merged_file:
+                                cleanup_temp_files([merged_file])
 
-        with col1:
-            if st.button("🚀 Merge"):
-                with st.spinner("Merging PDFs..."):
-                    merged_path = merge_pdfs(files)
-
-                    with open(merged_path, "rb") as f:
-                        st.success("✅ Merge Complete!")
-                        st.download_button(
-                            label="⬇ Download Merged PDF",
-                            data=f,
-                            file_name=output_name,
-                            mime="application/pdf"
-                        )
-
-        with col2:
-            if st.button("❌ Reset"):
-                st.rerun()
-
-# -----------------------
-# Compress PDF UI
-# -----------------------
+            with col2:
+                if st.button("❌ Reset"):
+                    st.experimental_rerun()
 
 elif option == "Compress PDF":
     st.title("🗜️ Compress PDF")
+    st.info("Upload a PDF and create a compressed version. Supports uploads up to 1 GB.")
 
     file = st.file_uploader("Upload a PDF", type="pdf")
-
     if file:
-        st.write(f"📄 {file.name}")
+        file_size = getattr(file, "size", None)
+        st.write(f"📄 {file.name} — {format_bytes(file_size) if file_size else 'Size unknown'}")
 
         output_name = st.text_input("Output file name", "compressed.pdf")
-
         col1, col2 = st.columns(2)
 
         with col1:
             if st.button("⚡ Compress"):
                 with st.spinner("Compressing PDF..."):
-                    temp_input = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-                    temp_input.write(file.read())
-                    temp_input.close()
+                    temp_path = None
+                    compressed_path = None
+                    try:
+                        ensure_pdf_size(file)
+                        temp_path = save_uploaded_file(file)
+                        compressed_path = compress_pdf(temp_path)
 
-                    compressed_path = compress_pdf(temp_input.name)
+                        original_size = Path(temp_path).stat().st_size
+                        compressed_size = Path(compressed_path).stat().st_size
+                        reduction = ((original_size - compressed_size) / original_size) * 100
 
-                    with open(compressed_path, "rb") as f:
-                        st.success("✅ Compression Complete!")
-                        st.download_button(
-                            label="⬇ Download Compressed PDF",
-                            data=f,
-                            file_name=output_name,
-                            mime="application/pdf"
-                        )
+                        st.write(f"📉 Original size: {format_bytes(original_size)}")
+                        st.write(f"📦 Compressed size: {format_bytes(compressed_size)}")
+                        st.write(f"🚀 Reduced by: {reduction:.2f}%")
+
+                        with open(compressed_path, "rb") as file_data:
+                            st.success("✅ Compression complete.")
+                            st.download_button(
+                                label="⬇ Download Compressed PDF",
+                                data=file_data,
+                                file_name=output_name,
+                                mime="application/pdf",
+                            )
+                    except Exception as error:
+                        st.error(f"Compression failed: {error}")
+                    finally:
+                        cleanup_temp_files([temp_path] if temp_path else [])
+                        cleanup_temp_files([compressed_path] if compressed_path else [])
 
         with col2:
             if st.button("❌ Reset"):
-                st.rerun()
+                st.experimental_rerun()
 
-# -----------------------
-# Footer
-# -----------------------
 st.markdown("---")
-st.caption("🚀 Compresify | Fast • Simple • Efficient")
+st.caption("🚀 Compresify | Built for production uploads up to 1 GB")

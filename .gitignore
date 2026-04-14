@@ -1,0 +1,13 @@
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.pyo
+*.pyd
+*.log
+*.tmp
+*.pdf
+*.sqlite3
+.env
+.venv/
+venv/
+.streamlit/cache/
